@@ -2,79 +2,47 @@
 #include <cstdlib>
 #include <iostream>
 #include <sstream>
-#include <string>
 #include <sys/wait.h>
 #include <unistd.h>
 #include <vector>
 
-void executeCommand(const std::vector<std::string>& args)
-{
-    std::vector<char*> argsPointers{};
-    for (auto& arg : args)
-        argsPointers.push_back(const_cast<char*>(arg.c_str()));
-    argsPointers.push_back(nullptr);
-
-    execvp(argsPointers[0], argsPointers.data());
-    perror("execvp failed");
-    std::_Exit(EXIT_FAILURE);
-}
-
-void handleStandardCommand(std::string&& command)
-{
-    if (fork() == 0)
-    {
-        std::vector<std::string> args{};
-        std::stringstream ss{std::move(command)};
-        std::string arg{};
-        while (ss >> arg)
-            args.push_back(arg);
-        executeCommand(args);
-    }
-
-    wait(nullptr);
-}
-
-void handlePipedCommands(std::string&& leftCommand, std::string&& rightCommand)
+int execCommand(const std::vector<std::string>& args, int prevReadFd, bool hasNext)
 {
     int pipeFd[2];
     if (pipe(pipeFd) == -1)
     {
-        perror("pipe");
-        return;
+        perror("pipe failed");
+        std::exit(EXIT_FAILURE);
     }
 
     if (fork() == 0)
     {
-        dup2(pipeFd[1], STDOUT_FILENO);
+        if (hasNext)
+            dup2(pipeFd[1], STDOUT_FILENO);
+        dup2(prevReadFd, STDIN_FILENO);
+
+        close(prevReadFd);
         close(pipeFd[0]);
         close(pipeFd[1]);
 
-        std::vector<std::string> args{};
-        std::stringstream ss{std::move(leftCommand)};
-        std::string arg{};
-        while (ss >> arg)
-            args.push_back(arg);
-        executeCommand(args);
+        std::vector<char*> argsPointers{};
+        for (auto& arg : args)
+            argsPointers.push_back(const_cast<char*>(arg.c_str()));
+        argsPointers.push_back(nullptr);
+
+        execvp(argsPointers[0], argsPointers.data());
+        perror("execvp failed");
+        std::_Exit(EXIT_FAILURE);
     }
 
-    if (fork() == 0)
-    {
-        dup2(pipeFd[0], STDIN_FILENO);
-        close(pipeFd[0]);
-        close(pipeFd[1]);
+    close(prevReadFd);
+    close(pipeFd[1]);
 
-        std::vector<std::string> args{};
-        std::stringstream ss{std::move(rightCommand)};
-        std::string arg{};
-        while (ss >> arg)
-            args.push_back(arg);
-        executeCommand(args);
-    }
+    if (hasNext)
+        return pipeFd[0];
 
     close(pipeFd[0]);
-    close(pipeFd[1]);
-    wait(nullptr);
-    wait(nullptr);
+    return -1;
 }
 
 int main()
@@ -87,12 +55,31 @@ int main()
         if ((!std::getline(std::cin, input)) || input == "exit")
             break;
 
-        size_t pipePosition{input.find('|')};
+        int prevReadFd{-1};
+        int numCommands{0};
 
-        if (pipePosition == std::string::npos)
-            handleStandardCommand(std::move(input));
-        else
-            handlePipedCommands(input.substr(0, pipePosition), input.substr(pipePosition + 1));
+        std::stringstream stream{std::move(input)};
+        std::string token{};
+        std::vector<std::string> tokens{};
+        while (stream >> token)
+        {
+            if (token == "|")
+            {
+                prevReadFd = execCommand(tokens, prevReadFd, true);
+                tokens.clear();
+                ++numCommands;
+                continue;
+            }
+
+            tokens.push_back(std::move(token));
+        }
+
+        prevReadFd = execCommand(tokens, prevReadFd, false);
+        tokens.clear();
+        ++numCommands;
+
+        for (int i{0}; i < numCommands; ++i)
+            wait(nullptr);
     }
 
     return 0;

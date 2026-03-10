@@ -8,14 +8,11 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-find_package(Threads REQUIRED)
-
 add_executable(minishell
     src/main.cpp
 )
 
 target_include_directories(minishell PRIVATE include)
-target_link_libraries(minishell PRIVATE Threads::Threads)
 
 target_compile_options(minishell PRIVATE
     -Wall
